@@ -27,9 +27,11 @@ const ACTION_PROBABILITIES = {
   // CUSTOM_CONTRACT_CALL: 0, // Set to >0 to enable
 };
 
-// --- Token Configuration (Using YOUR ORIGINAL testnet token addresses) ---
+// --- Token Configuration (Using YOUR ORIGINAL testnet token addresses, despite previous errors) ---
+// Note: These addresses are what you provided. If you still face 'could not decode result data' or 'missing revert data'
+// errors for these tokens, it strongly suggests they are no longer valid ERC-20 contracts on the XRPL EVM Testnet.
+// You would need to find new, active testnet token addresses.
 const TOKENS = {
-  // WXRP is usually required for swaps involving XRP on EVM DEXs
   WXRP: "0x81Be083099c2C65b062378E74Fa8469644347BB7", // Your Original WXRP token address
   RISE: "0x0c28777DEebe4589e83EF2Dc7833354e6a0aFF85", // Your Original RISE token address
   RIBBIT: "0x3D757474472f8F2A66Bdc1b51e4C4D11E813C16c", // Your Original RIBBIT token address
@@ -576,31 +578,39 @@ async function getWalletTokenBalance(wallet, tokenSymbol) {
 
 async function getWalletBalances(wallet) {
     const balances = {};
+    // Ensure XRP is always checked first
+    try {
+        const xrpBalance = await provider.getBalance(wallet.address);
+        balances["XRP"] = ethers.formatEther(xrpBalance);
+    } catch (error) {
+        logger.warn(chalk.yellow(`Could not fetch native XRP balance for wallet ${wallet.address}: ${error.message}`));
+        balances["XRP"] = "0";
+    }
+
+    // Now iterate through defined ERC20 tokens
     for (const tokenSymbol in TOKENS) {
+        if (tokenSymbol === "XRP") continue; // Skip if already covered by native XRP check
+
         try {
-            // Special handling for the native XRP symbol if it's not defined in TOKENS but implicitly exists
-            if (tokenSymbol === "XRP" && !TOKENS[tokenSymbol]) {
-                const balance = await provider.getBalance(wallet.address);
-                balances[tokenSymbol] = ethers.formatEther(balance);
-            } else {
-                balances[tokenSymbol] = await getWalletTokenBalance(wallet, tokenSymbol);
-            }
+            balances[tokenSymbol] = await getWalletTokenBalance(wallet, tokenSymbol);
         } catch (error) {
             logger.warn(chalk.yellow(`Could not fetch balance for ${tokenSymbol} for wallet ${wallet.address}: ${error.message}`));
             balances[tokenSymbol] = "0"; // Set to "0" if balance fetch fails
         }
     }
-    // Also get XRP balance explicitly if not already covered (e.g., if WXRP is there but not native XRP)
-    if (!balances["XRP"]) {
-        try {
-            const xrpBalance = await provider.getBalance(wallet.address);
-            balances["XRP"] = ethers.formatEther(xrpBalance);
-        } catch (error) {
-            logger.warn(chalk.yellow(`Could not fetch native XRP balance for wallet ${wallet.address}: ${error.message}`));
-            balances["XRP"] = "0";
+    return balances;
+}
+
+async function displayAllWalletBalances() {
+    logger.info(chalk.cyan("\n--- Current Wallet Balances ---"));
+    for (const wallet of wallets) {
+        logger.info(chalk.magenta(`Wallet: ${wallet.address}`));
+        const balances = await getWalletBalances(wallet);
+        for (const tokenSymbol in balances) {
+            logger.info(chalk.blue(`  ${tokenSymbol}: ${balances[tokenSymbol]}`));
         }
     }
-    return balances;
+    logger.info(chalk.cyan("-------------------------------"));
 }
 
 // --- Core Interaction Functions ---
@@ -996,7 +1006,7 @@ async function checkAndRebalance(wallet) {
         try {
             let rebalanced = false;
             for (const tokenSymbol of Object.keys(TOKENS)) {
-                if (tokenSymbol === "XRP" || parseFloat(walletBalances[tokenSymbol]) < REBALANCE_THRESHOLDS[tokenSymbol] * 2) { // Only swap if other token is not also critically low
+                if (tokenSymbol === "XRP" || parseFloat(walletBalances[tokenSymbol]) < REBALANCE_THRESHOLDS.XRP * 2) { // Only swap if other token is not also critically low
                     continue;
                 }
                 const amountToSwap = (parseFloat(walletBalances[tokenSymbol]) * 0.05).toFixed(4); // Swap 5% of the other token
@@ -1174,12 +1184,15 @@ async function startRandomLoop() {
                 } else {
                     // Only throw if no receipt AND not a known "skip" condition (like insufficient balance)
                     // This prevents retries for known-fail scenarios that are already logged as skips.
-                    if (!error || !error.message.includes("Insufficient") && !error.message.includes("zero")) {
+                    // Removed the `!error ||` part as error should always be defined in a catch block
+                    if (error && !error.message.includes("Insufficient") && !error.message.includes("zero")) {
                          throw new Error("Action failed to produce a confirmed transaction.");
+                    } else if (!error) { // If there's no error but also no receipt
+                        throw new Error("Action completed without error but no transaction receipt was returned.");
                     }
                 }
 
-            } catch (error) {
+            } catch (error) { // Ensure error is caught and used
                 retriesLeft--;
                 logger.error(chalk.red(`Action failed for wallet ${wallet.address}: ${error.message}`));
                 if (retriesLeft > 0) {
@@ -1276,8 +1289,9 @@ function loadState() {
 async function runMenu(wallets) {
   console.log(chalk.bold("\nSelect an option:"));
   console.log(chalk.yellow("1. Start 24-Hour Random Loop"));
-  console.log(chalk.yellow("2. Test RPC Connection"));
-  console.log(chalk.yellow("3. Exit"));
+  console.log(chalk.yellow("2. Display All Wallet Balances")); // Added this option
+  console.log(chalk.yellow("3. Test RPC Connection"));
+  console.log(chalk.yellow("4. Exit")); // Adjusted option number
 
   const readline = require('readline').createInterface({
     input: process.stdin,
@@ -1290,11 +1304,16 @@ async function runMenu(wallets) {
       case '1':
         await startRandomLoop();
         break;
-      case '2':
+      case '2': // Handle new option
+        await displayAllWalletBalances();
+        // After displaying, offer the menu again or exit
+        runMenu(wallets); // Loop back to menu
+        break;
+      case '3': // Adjusted option number
         await testRpc();
         process.exit(0);
         break;
-      case '3':
+      case '4': // Adjusted option number
         logger.info(chalk.red("Exiting bot."));
         process.exit(0);
         break;

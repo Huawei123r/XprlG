@@ -233,8 +233,8 @@ async function getGasPrice(retryAttempt = 0) {
 async function withRetry(func, maxRetries = 3, initialDelayMs = 1000, confirmationTimeoutMs = 60000) {
     for (let i = 0; i < maxRetries; i++) {
         try {
-            const gasOptions = await getGasPrice(i);
-            const tx = await func(gasOptions);
+            const gasOptions = await getGasPrice(i); // Fetch gas options here for each retry
+            const tx = await func(gasOptions); // Pass gasOptions to the wrapped function
             logger.info(chalk.cyan(`Transaction sent: ${EXPLORER_TX_URL}${tx.hash}`));
             activityStats.totalTransactions++;
 
@@ -551,7 +551,12 @@ async function getCalculatedAmount(wallet, tokenSymbol) {
       balanceFormatted = parseFloat(ethers.formatEther(balance));
       decimals = 18; // XRP has 18 decimals
     } else {
-      const tokenContract = new ethers.Contract(TOKENS[tokenSymbol], ERC20_ABI, provider);
+      const tokenAddress = TOKENS[tokenSymbol];
+      if (!tokenAddress) {
+          logger.warn(chalk.yellow(`Token address not found for symbol: ${tokenSymbol}. Cannot calculate amount.`));
+          return "0"; // Return "0" if token address is not configured
+      }
+      const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
       decimals = await tokenContract.decimals();
       const balance = await tokenContract.balanceOf(wallet.address);
       if (balance === BigInt(0)) { // Explicitly handle BigInt(0)
@@ -579,7 +584,9 @@ async function getCalculatedAmount(wallet, tokenSymbol) {
         return "0";
     }
 
-    return amount.toFixed(decimals); // Format to string here
+    // Return the amount formatted as a string with appropriate precision
+    // Use Math.max to ensure precision is at least 4 to avoid overly short numbers like 0.0
+    return amount.toFixed(Math.max(4, decimals)); 
   } catch (error) {
     logger.warn(chalk.yellow(`Warning: Could not calculate amount for ${tokenSymbol} for wallet ${wallet.address}. ${error.message}. Returning "0".`));
     return "0"; // Always return "0" as a string on error
@@ -778,7 +785,10 @@ async function startRandomLoop(wallets) {
                   success = true; // Mark as success to move to next wallet/action
                   continue;
               }
-              await performSwap(wallet, swapPair, swapAmount, swapDirection, await getGasPrice()); // Pass gas options here
+              // Corrected call: withRetry provides gasOptions
+              await withRetry(async (gasOptions) => {
+                await performSwap(wallet, swapPair, swapAmount, swapDirection, gasOptions);
+              });
               activityStats.swaps++;
               activityStats.successfulActions++;
               break;
@@ -801,10 +811,15 @@ async function startRandomLoop(wallets) {
               }
 
               const sendCfg = { sendTokenName, sendAddressCount: 1, sendAmount };
+              // Corrected calls: withRetry provides gasOptions
               if (sendType === "sendAndReceive") {
-                await performSendAndReceive(wallet, sendCfg, await getGasPrice()); // Pass gas options here
+                await withRetry(async (gasOptions) => {
+                  await performSendAndReceive(wallet, sendCfg, gasOptions);
+                });
               } else {
-                await performRandomSend(wallet, sendCfg, await getGasPrice()); // Pass gas options here
+                await withRetry(async (gasOptions) => {
+                  await performRandomSend(wallet, sendCfg, gasOptions);
+                });
               }
               activityStats.sends++;
               activityStats.successfulActions++;
@@ -828,14 +843,20 @@ async function startRandomLoop(wallets) {
               }
 
               const addLpCfg = { lpBaseAmount, lpTokenAmount, lpTokenName };
-              await performAddLiquidity(wallet, addLpCfg, await getGasPrice()); // Pass gas options here
+              // Corrected call: withRetry provides gasOptions
+              await withRetry(async (gasOptions) => {
+                await performAddLiquidity(wallet, addLpCfg, gasOptions);
+              });
               activityStats.liquidityAdds++;
               activityStats.successfulActions++;
               break;
 
             case 'customContractCall':
                 activityStats.customContractCalls = (activityStats.customContractCalls || 0); // Initialize if undefined
-                await performCustomContractCall(wallet, await getGasPrice()); // Pass gas options here
+                // Corrected call: withRetry provides gasOptions
+                await withRetry(async (gasOptions) => {
+                    await performCustomContractCall(wallet, gasOptions);
+                });
                 activityStats.customContractCalls++;
                 activityStats.successfulActions++;
                 break;
@@ -936,7 +957,9 @@ async function runMenu(wallets) {
         const selectedPairSwap = ALL_PAIRS[swapCfg.pairIndex];
 
         try {
-          await withRetry(() => performSwap(selectedWalletSwap, selectedPairSwap, swapCfg.amount, swapCfg.direction, await getGasPrice())); // Pass gas options here
+          await withRetry(async (gasOptions) => { // Make the inner function async and accept gasOptions
+            await performSwap(selectedWalletSwap, selectedPairSwap, swapCfg.amount, swapCfg.direction, gasOptions);
+          });
         } catch (err) {
           logger.error(chalk.red(`Swap failed: ${err.message}`));
         }
@@ -975,9 +998,13 @@ async function runMenu(wallets) {
 
         try {
           if (sendCfg.sendType === "sendAndReceive") {
-            await withRetry(() => performSendAndReceive(selectedWalletSend, sendCfg, await getGasPrice())); // Pass gas options here
+            await withRetry(async (gasOptions) => { // Make the inner function async and accept gasOptions
+              await performSendAndReceive(selectedWalletSend, sendCfg, gasOptions);
+            });
           } else {
-            await withRetry(() => performRandomSend(selectedWalletSend, sendCfg, await getGasPrice())); // Pass gas options here
+            await withRetry(async (gasOptions) => { // Make the inner function async and accept gasOptions
+              await performRandomSend(selectedWalletSend, sendCfg, gasOptions);
+            });
           }
         } catch (err) {
           logger.error(chalk.red(`Send failed: ${err.message}`));
@@ -1008,7 +1035,9 @@ async function runMenu(wallets) {
         const selectedWalletAddLp = wallets[addLpCfg.walletIndex];
 
         try {
-          await withRetry(() => performAddLiquidity(selectedWalletAddLp, addLpCfg, await getGasPrice())); // Pass gas options here
+          await withRetry(async (gasOptions) => { // Make the inner function async and accept gasOptions
+            await performAddLiquidity(selectedWalletAddLp, addLpCfg, gasOptions);
+          });
         } catch (err) {
           logger.error(chalk.red(`Add Liquidity failed: ${err.message}`));
         }

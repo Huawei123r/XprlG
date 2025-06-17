@@ -30,7 +30,7 @@ const GAS_LIMIT_CUSTOM_CONTRACT = 150000; // For arbitrary contract calls
 
 // --- CONTRACT ADDRESSES ---
 const ROUTER_ADDRESS = "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"; // Uniswap V2 Router address (example - **MUST BE VERIFIED FOR XRPL EVM TESTNET**)
-const FACTORY_ADDRESS = process.env.FACTORY_ADDRESS || "0x5C69bEe701ef8157bDEdD3e4232aD048d0BCf58E"; // Uniswap V2 Factory (example - **MUST BE VERIFIED FOR XRPL EVM TESTNET**)
+// FACTORY_ADDRESS has been removed as per your request
 
 // IMPORTANT: Replace with actual testnet token addresses
 const TOKENS = {
@@ -75,9 +75,8 @@ const REBALANCE_THRESHOLDS = {
 const ACTION_WEIGHTS = {
   swap: 40,
   send: 20,
-  addLiquidity: 15,
-  removeLiquidity: 15,
-  customContractCall: 10, // New action type for custom contract calls
+  addLiquidity: 20, // Increased weight as removeLiquidity is gone
+  customContractCall: 20, // Increased weight
 };
 
 // --- Telegram Alert Configuration ---
@@ -103,18 +102,13 @@ const ROUTER_ABI = [
   "function swapExactETHForTokens(uint amountOutMin,address[] calldata path,address to,uint deadline) external payable returns (uint[] memory)",
   "function swapExactTokensForETH(uint amountIn,uint amountOutMin,address[] calldata path,address to,uint deadline) external returns (uint[] memory)",
   "function addLiquidityETH(address token,uint amountTokenDesired,uint amountTokenMin,uint amountETHMin,address to,uint deadline) external payable returns (uint amountToken,uint amountETH,uint liquidity)",
-  "function removeLiquidityETH(address token, uint256 liquidity, uint256 amountTokenMin, uint256 amountETHMin, address to, uint256 deadline) external returns (uint256 amountToken, uint256 amountETH)",
+  // "function removeLiquidityETH(address token, uint256 liquidity, uint256 amountTokenMin, uint256 amountETHMin, address to, uint256 deadline) external returns (uint256 amountToken, uint256 amountETH)", // Removed
   "function getAmountsOut(uint256 amountIn, address[] memory path) view returns (uint256[] memory amounts)",
-  "function addLiquidity(address tokenA, address tokenB, uint amountADesired, uint amountBDesired, uint amountAMin, uint amountBMin, address to, uint deadline) external returns (uint amountA, uint amountB, uint liquidity)", // For token-token LP
-  "function removeLiquidity(address tokenA, address tokenB, uint liquidity, uint amountAMin, uint amountBMin, address to, uint deadline) external returns (uint amountA, uint amountB)", // For token-token LP removal
+  // "function addLiquidity(address tokenA, address tokenB, uint amountADesired, uint amountBDesired, uint amountAMin, uint amountBMin, address to, uint deadline) external returns (uint amountA, uint amountB, uint liquidity)", // For token-token LP - keep if you want to add token-token LP
+  // "function removeLiquidity(address tokenA, address tokenB, uint liquidity, uint amountAMin, uint amountBMin, address to, uint deadline) external returns (uint amountA, uint amountB)", // For token-token LP removal - Removed
 ];
 
-// FACTORY_ABI is still needed for getWalletLPPairs to find LP token addresses
-const FACTORY_ABI = [
-  "function getPair(address tokenA, address tokenB) view returns (address pair)",
-];
-
-// --- REMOVED: PAIR_ABI as it's not needed without getPairPrice ---
+// FACTORY_ABI has been removed as per your request
 
 // --- NEW: Placeholder for Custom Contract Interactions ---
 // Define contracts your bot can interact with.
@@ -174,8 +168,9 @@ let activityStats = {
   swaps: 0,
   sends: 0,
   liquidityAdds: 0,
-  liquidityRemovals: 0,
+  liquidityRemovals: 0, // Keep for historical stats, though no longer performed
   rebalances: 0,
+  customContractCalls: 0, // New stat
   successfulActions: 0,
   failedActions: 0,
   totalTransactions: 0,
@@ -196,7 +191,7 @@ function loadState() {
         } catch (error) {
             logger.error(chalk.red(`Error loading state from ${STATE_FILE}: ${error.message}. Starting fresh.`));
             // Reset if corrupted
-            activityStats = { swaps: 0, sends: 0, liquidityAdds: 0, liquidityRemovals: 0, rebalances: 0, successfulActions: 0, failedActions: 0, totalTransactions: 0, startTime: Date.now() };
+            activityStats = { swaps: 0, sends: 0, liquidityAdds: 0, liquidityRemovals: 0, rebalances: 0, customContractCalls: 0, successfulActions: 0, failedActions: 0, totalTransactions: 0, startTime: Date.now() };
         }
     } else {
         logger.info(chalk.magenta(`No previous state found. Starting fresh.`));
@@ -219,15 +214,16 @@ function saveState() {
 function displayBanner() {
   console.log(chalk.hex("#8A2BE2").bold("███████████████████████████████████████"));
   console.log(chalk.hex("#8A2BE2").bold("█                                       █"));
-  console.log(chalk.hex("#8A2BE2").bold("█         XRPL EVM BOT                █")); // Changed name
+  console.log(chalk.hex("#8A2BE2").bold("█         XRPL EVM BOT                █"));
+  console.log(chalk.hex("#8A2BE2").bold("█          ( ﾟヮﾟ)                     █")); // Ichigo placeholder
   console.log(chalk.hex("#8A2BE2").bold("█                                       █"));
   console.log(chalk.hex("#8A2BE2").bold("███████████████████████████████████████"));
   console.log(chalk.hex("#D8BFD8")("         Automated DEX Interaction      "));
-  console.log(chalk.hex("#D8BFD8")("         Build by Gemini AI             \n"));
+  console.log(chalk.hex("#D8BFD8")("         Built by Gemini AI             \n"));
 }
 
 async function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms);
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 // --- MODIFIED: getGasPrice for EIP-1559 and retries ---
@@ -317,7 +313,8 @@ async function getWalletBalances(wallet) {
     return balances;
 }
 
-// --- REMOVED: getPairPrice function ---
+// --- REMOVED: getWalletLPPairs function (no longer needs FACTORY_ADDRESS) ---
+// --- REMOVED: performRemoveLiquidity function (no longer needs FACTORY_ADDRESS) ---
 
 // --- Core Interaction Functions ---
 
@@ -524,110 +521,6 @@ async function performAddLiquidity(wallet, cfg, gasOptions) {
   );
 }
 
-async function getWalletLPPairs(wallet) {
-    const lpPairsHeld = [];
-    // FACTORY_ABI and FACTORY_ADDRESS are still needed here to find the LP token addresses
-    const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, provider);
-
-    for (const pair of ALL_PAIRS) {
-        const [tokenASymbol, tokenBSymbol] = pair;
-        const tokenAAddress = TOKENS[tokenASymbol];
-        const tokenBAddress = TOKENS[tokenBSymbol];
-
-        if (!tokenAAddress || !tokenBAddress) {
-            logger.warn(chalk.yellow(`Skipping LP check for unknown token in pair: ${tokenASymbol}/${tokenBSymbol}`));
-            continue;
-        }
-
-        let lpTokenAddress = null;
-        try {
-            lpTokenAddress = await factory.getPair(tokenAAddress, tokenBAddress);
-        } catch (err) {
-            logger.error(chalk.red(`Error getting LP pair address from factory for ${tokenASymbol}/${tokenBSymbol}: ${err.message}`));
-            continue;
-        }
-
-        if (lpTokenAddress === ethers.ZeroAddress) {
-            continue;
-        }
-
-        try {
-            const lpTokenContract = new ethers.Contract(lpTokenAddress, ERC20_ABI, provider);
-            const lpBalanceRaw = await lpTokenContract.balanceOf(wallet.address);
-
-            if (lpBalanceRaw > BigInt(0)) {
-                const lpDecimals = await lpTokenContract.decimals();
-                lpPairsHeld.push({
-                    pair: pair,
-                    lpTokenAddress: lpTokenAddress,
-                    lpBalance: ethers.formatUnits(lpBalanceRaw, lpDecimals),
-                    lpBalanceRaw: lpBalanceRaw
-                });
-                logger.info(chalk.gray(`  Wallet ${wallet.address.slice(0,6)}... holds ${ethers.formatUnits(lpBalanceRaw, lpDecimals)} LP tokens for ${tokenASymbol}-${tokenBSymbol}.`));
-            }
-        } catch (error) {
-            logger.warn(chalk.yellow(`Error checking LP for pair ${tokenASymbol}/${tokenBSymbol} for wallet ${wallet.address}: ${error.message}`));
-        }
-    }
-    return lpPairsHeld;
-}
-
-
-async function performRemoveLiquidity(wallet, lpPosition, gasOptions) {
-    const [tokenASymbol, tokenBSymbol] = lpPosition.pair;
-    const lpTokenSymbol = `${tokenASymbol}-${tokenBSymbol} LP`;
-
-    logger.info(chalk.blue(`REMOVE LIQUIDITY: From ${lpTokenSymbol} pool for wallet ${wallet.address}`));
-
-    const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, wallet);
-    const lpTokenC = new ethers.Contract(lpPosition.lpTokenAddress, ERC20_ABI, wallet);
-
-    const lpAmountToRemove = lpPosition.lpBalanceRaw / BigInt(4);
-    if (lpAmountToRemove === BigInt(0)) {
-        logger.warn(chalk.yellow(`Wallet ${wallet.address} has too little LP tokens for ${lpTokenSymbol} to remove 25%. Skipping removal.`));
-        throw new Error(`Too little LP tokens for ${lpTokenSymbol}.`);
-    }
-
-    const deadline = Math.floor(Date.now() / 1e3) + 600;
-
-    const currentAllowance = await lpTokenC.allowance(wallet.address, ROUTER_ADDRESS);
-    if (currentAllowance < lpAmountToRemove) {
-        logger.info(chalk.blue(`Approving router for ${ethers.formatEther(lpAmountToRemove)} ${lpTokenSymbol}...`));
-        await withRetry(() =>
-            lpTokenC.approve(ROUTER_ADDRESS, lpAmountToRemove, { gasLimit: GAS_LIMIT_ERC20, ...gasOptions })
-        );
-    } else {
-       logger.info(chalk.gray(`Already approved enough ${lpTokenSymbol} for router.`));
-    }
-
-    let removeTxPromise;
-    // Assuming XRP is your native token, so check if either token in the pair is XRP
-    if (tokenASymbol === "XRP" || tokenBSymbol === "XRP") {
-        const erc20TokenAddress = tokenASymbol === "XRP" ? TOKENS[tokenBSymbol] : TOKENS[tokenASymbol];
-        removeTxPromise = () => router.removeLiquidityETH(
-            erc20TokenAddress,
-            lpAmountToRemove,
-            0, // amountTokenMin
-            0, // amountETHMin
-            wallet.address,
-            deadline,
-            { gasLimit: GAS_LIMIT_COMPLEX, ...gasOptions }
-        );
-    } else {
-        removeTxPromise = () => router.removeLiquidity(
-            TOKENS[tokenASymbol],
-            TOKENS[tokenBSymbol],
-            lpAmountToRemove,
-            0, // amountAMin
-            0, // amountBMin
-            wallet.address,
-            deadline,
-            { gasLimit: GAS_LIMIT_COMPLEX, ...gasOptions }
-        );
-    }
-
-    await withRetry(removeTxPromise);
-}
 
 // --- NEW Helper: Perform Custom Contract Call (Conceptual) ---
 async function performCustomContractCall(wallet, gasOptions) {
@@ -828,9 +721,8 @@ async function startRandomLoop(wallets) {
     logger.info(chalk.hex("#FFA500")(`  Swaps: ${activityStats.swaps}`));
     logger.info(chalk.hex("#FFA500")(`  Sends (Random/S&R): ${activityStats.sends}`));
     logger.info(chalk.hex("#FFA500")(`  Liquidity Added: ${activityStats.liquidityAdds}`));
-    logger.info(chalk.hex("#FFA500")(`  Liquidity Removed: ${activityStats.liquidityRemovals}`));
-    logger.info(chalk.hex("#FFA500")(`  Custom Calls: ${activityStats.customContractCalls || 0}`)); // New stat
     logger.info(chalk.hex("#FFA500")(`  Rebalances: ${activityStats.rebalances}`));
+    logger.info(chalk.hex("#FFA500")(`  Custom Calls: ${activityStats.customContractCalls || 0}`)); // New stat
     logger.info(chalk.hex("#FFA500")(`  Total Successful Actions: ${activityStats.successfulActions}`));
     logger.info(chalk.hex("#FFA500")(`  Total Failed Actions: ${activityStats.failedActions}`));
     logger.info(chalk.hex("#FFA500")(`  Total On-Chain Transactions: ${activityStats.totalTransactions}`));
@@ -841,7 +733,6 @@ async function startRandomLoop(wallets) {
              `*Swaps:* ${activityStats.swaps}\n` +
              `*Sends:* ${activityStats.sends}\n` +
              `*LP Added:* ${activityStats.liquidityAdds}\n` +
-             `*LP Removed:* ${activityStats.liquidityRemovals}\n` +
              `*Custom Calls:* ${activityStats.customContractCalls || 0}\n` +
              `*Rebalances:* ${activityStats.rebalances}\n` +
              `*Successful Actions:* ${activityStats.successfulActions}\n` +
@@ -884,12 +775,8 @@ async function startRandomLoop(wallets) {
 
       while (!success && retries > 0) {
         try {
-          // --- REMOVED: Price monitoring/triggering logic ---
           const chosenAction = selectWeightedAction(ACTION_WEIGHTS);
           logger.info(chalk.gray(`Selected action for wallet ${wallet.address.slice(0, 6)}...: ${chosenAction}`));
-
-          // --- All action calls now include `gasOptions` as argument to `perform...` functions ---
-          // `withRetry` now handles calling `getGasPrice` and passing the `gasOptions` to your `perform...` function.
 
           switch (chosenAction) {
             case 'swap':
@@ -948,20 +835,19 @@ async function startRandomLoop(wallets) {
               activityStats.successfulActions++;
               break;
 
-            case 'removeLiquidity':
-              const lpPositions = await getWalletLPPairs(wallet);
-
-              if (lpPositions.length > 0) {
-                  const selectedLpPosition = lpPositions[Math.floor(Math.random() * lpPositions.length)];
-                  await performRemoveLiquidity(wallet, selectedLpPosition);
-                  activityStats.liquidityRemovals++;
-                  activityStats.successfulActions++;
-              } else {
-                  logger.info(chalk.gray(`Wallet ${wallet.address} has no LP positions to remove. Skipping removal action.`));
-                  success = true;
-                  continue;
-              }
-              break;
+            // case 'removeLiquidity': // REMOVED
+            //   const lpPositions = await getWalletLPPairs(wallet);
+            //   if (lpPositions.length > 0) {
+            //       const selectedLpPosition = lpPositions[Math.floor(Math.random() * lpPositions.length)];
+            //       await performRemoveLiquidity(wallet, selectedLpPosition);
+            //       activityStats.liquidityRemovals++;
+            //       activityStats.successfulActions++;
+            //   } else {
+            //       logger.info(chalk.gray(`Wallet ${wallet.address} has no LP positions to remove. Skipping removal action.`));
+            //       success = true;
+            //       continue;
+            //   }
+            //   break;
 
             case 'customContractCall':
                 activityStats.customContractCalls = (activityStats.customContractCalls || 0);
@@ -995,7 +881,7 @@ async function startRandomLoop(wallets) {
         logger.error(chalk.red(`Skipping wallet ${wallet.address} for this cycle due to repeated failures.`));
         await sendAlert(`Wallet ${wallet.address.slice(0,6)}... was skipped for a full cycle due to repeated transaction failures.`, 'warn');
       }
-      await delay(DELAY_BETWEEN_WALLETS);
+      await delay(DELAY_BETAY_BETWEEN_WALLETS);
     }
     logger.info(chalk.gray("\nAll wallets processed for this cycle. Waiting for next cycle..."));
     await delay(DELAY_AFTER_CYCLE);
@@ -1024,6 +910,7 @@ async function runMenu(wallets) {
         { name: "2) Perform single swap", value: "singleSwap" },
         { name: "3) Perform single token send", value: "singleSend" },
         { name: "4) Perform single add liquidity", value: "singleAddLiquidity" },
+        // { name: "5) Perform single remove liquidity", value: "singleRemoveLiquidity" }, // Removed
         { name: "5) Start 24-Hour Random Loop", value: "randomLoop" },
         { name: "6) Exit",           value: "exit" },
       ]
@@ -1038,12 +925,8 @@ async function runMenu(wallets) {
           for (const tokenSymbol in balances) {
             logger.info(`  ${tokenSymbol}: ${balances[tokenSymbol]}`);
           }
-          // Also show LP balances
-          const lpPositions = await getWalletLPPairs(wallet);
-          if (lpPositions.length > 0) {
-              logger.info(chalk.yellow(`  LP Positions:`));
-              lpPositions.forEach(lp => logger.info(`    ${lp.pair.join('-')} LP: ${lp.lpBalance}`));
-          }
+          // No longer checking specific LP balances as Factory is removed
+          // The bot will only track tokens listed in TOKENS
         }
         console.log();
         await inquirer.prompt([{ name: "dummy", type: "input", message: "Press Enter to continue…" }]);
@@ -1153,6 +1036,13 @@ async function runMenu(wallets) {
         await inquirer.prompt([{ name: "dummy", type: "input", message: "Press Enter to continue…" }]);
         break;
 
+      // case "singleRemoveLiquidity": // REMOVED
+      //   logger.info(chalk.hex("#D8BFD8").bold("--- Performing Single Remove Liquidity ---"));
+      //   logger.warn(chalk.yellow("This feature is currently disabled because the Factory Address (needed to find LP positions) is not configured."));
+      //   console.log();
+      //   await inquirer.prompt([{ name: "dummy", type: "input", message: "Press Enter to continue…" }]);
+      //   break;
+
       case "randomLoop":
         await startRandomLoop(wallets);
         break;
@@ -1168,7 +1058,7 @@ async function runMenu(wallets) {
 // --- Main Execution ---
 async function main() {
   displayBanner();
-  logger.info(chalk.hex("#D8BFD8").bold("Initializing XRPL EVM Bot…")); // Changed name here too
+  logger.info(chalk.hex("#D8BFD8").bold("Initializing XRPL EVM Bot…"));
 
   try {
     await testRpc();

@@ -213,7 +213,8 @@ async function delay(ms) {
 
 async function getGasPrice(retryAttempt = 0) {
     const feeData = await provider.getFeeData();
-    let buffer = 1.2 + (retryAttempt * 0.1);
+    // Increased buffer significantly for aggressive gas pricing on testnet
+    let buffer = 2.5 + (retryAttempt * 0.5); // Initial 2.5x, then 3x, 3.5x, etc.
 
     if (feeData.maxFeePerGas && feeData.maxPriorityFeePerGas) {
         const maxPriorityFeePerGas = (feeData.maxPriorityFeePerGas * BigInt(Math.round(buffer * 100))) / BigInt(100);
@@ -457,7 +458,7 @@ async function performAddLiquidity(wallet, cfg, gasOptions) {
     throw new Error(`Insufficient XRP for base amount + gas.`);
   }
   if (parseFloat(cfg.lpTokenAmount) > currentTokenBalance) {
-    logger.warn(chalk.yellow(`Add LP skipped for ${wallet.address}: Insufficient ${cfg.lpTokenName} balance. Needed ${cfg.lpTokenAmount}, have ${currentTokenBalance}.`));
+    logger.warn(chalk.yellow(`Add LP skipped for ${wallet.address}: Insufficient ${cfg.lpTokenAmount} balance. Needed ${cfg.lpTokenAmount}, have ${currentTokenBalance}.`));
     throw new Error(`Insufficient ${cfg.lpTokenName} balance.`);
   }
 

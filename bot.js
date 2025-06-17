@@ -5,7 +5,7 @@ const inquirer = require('inquirer');
 const chalk = require('chalk');
 const winston = require('winston');
 const fs = require('fs'); // For persistent state management
-const fetch = require('node-fetch'); // For Telegram alerts
+// const fetch = require('node-fetch'); // For Telegram alerts - REMOVED: Native fetch is available in Node.js v18+
 
 // --- Configuration Constants ---
 const RPC_URL = process.env.RPC_URL || 'https://rpc.testnet.xrplevm.org/';
@@ -30,7 +30,6 @@ const GAS_LIMIT_CUSTOM_CONTRACT = 150000; // For arbitrary contract calls
 
 // --- CONTRACT ADDRESSES ---
 const ROUTER_ADDRESS = "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"; // Uniswap V2 Router address (example - **MUST BE VERIFIED FOR XRPL EVM TESTNET**)
-// FACTORY_ADDRESS has been removed as per your request
 
 // IMPORTANT: Replace with actual testnet token addresses
 const TOKENS = {
@@ -75,8 +74,8 @@ const REBALANCE_THRESHOLDS = {
 const ACTION_WEIGHTS = {
   swap: 40,
   send: 20,
-  addLiquidity: 20, // Increased weight as removeLiquidity is gone
-  customContractCall: 20, // Increased weight
+  addLiquidity: 20,
+  customContractCall: 20,
 };
 
 // --- Telegram Alert Configuration ---
@@ -102,35 +101,24 @@ const ROUTER_ABI = [
   "function swapExactETHForTokens(uint amountOutMin,address[] calldata path,address to,uint deadline) external payable returns (uint[] memory)",
   "function swapExactTokensForETH(uint amountIn,uint amountOutMin,address[] calldata path,address to,uint deadline) external returns (uint[] memory)",
   "function addLiquidityETH(address token,uint amountTokenDesired,uint amountTokenMin,uint amountETHMin,address to,uint deadline) external payable returns (uint amountToken,uint amountETH,uint liquidity)",
-  // "function removeLiquidityETH(address token, uint256 liquidity, uint256 amountTokenMin, uint256 amountETHMin, address to, uint256 deadline) external returns (uint256 amountToken, uint256 amountETH)", // Removed
   "function getAmountsOut(uint256 amountIn, address[] memory path) view returns (uint256[] memory amounts)",
-  // "function addLiquidity(address tokenA, address tokenB, uint amountADesired, uint amountBDesired, uint amountAMin, uint amountBMin, address to, uint deadline) external returns (uint amountA, uint amountB, uint liquidity)", // For token-token LP - keep if you want to add token-token LP
-  // "function removeLiquidity(address tokenA, address tokenB, uint liquidity, uint amountAMin, uint amountBMin, address to, uint deadline) external returns (uint amountA, uint amountB)", // For token-token LP removal - Removed
 ];
 
-// FACTORY_ABI has been removed as per your request
-
 // --- NEW: Placeholder for Custom Contract Interactions ---
-// Define contracts your bot can interact with.
-// IMPORTANT: Add actual ABIs and addresses for functions you want to call!
 const CUSTOM_CONTRACTS_TO_INTERACT_WITH = [
     {
         name: "TestNFTContract",
         address: "0xYourTestNFTContractAddressHere", // Replace with actual address
         abi: [
-            // Example NFT ABI functions for interaction
             "function mint(address to, uint256 tokenId) public",
             "function tokenURI(uint256 tokenId) view returns (string)",
-            // Add more functions you want the bot to call
         ],
         functions: [
-            // List functions the bot is allowed to call, with arguments if needed
-            { name: "mint", args: (wallet) => [wallet.address, Math.floor(Math.random() * 1000000)] }, // Example: mint to self with random ID
+            { name: "mint", args: (wallet) => [wallet.address, Math.floor(Math.random() * 1000000)] },
         ]
     },
-    // Add more custom contracts here
 ];
-// Placeholder for ERC721 ABI if you need to check NFT balances later
+
 const ERC721_ABI = [
     "function balanceOf(address owner) view returns (uint256)",
     "function ownerOf(uint256 tokenId) view returns (address)",
@@ -168,13 +156,13 @@ let activityStats = {
   swaps: 0,
   sends: 0,
   liquidityAdds: 0,
-  liquidityRemovals: 0, // Keep for historical stats, though no longer performed
+  liquidityRemovals: 0,
   rebalances: 0,
-  customContractCalls: 0, // New stat
+  customContractCalls: 0,
   successfulActions: 0,
   failedActions: 0,
   totalTransactions: 0,
-  startTime: Date.now() // Track overall bot start time for state saving
+  startTime: Date.now()
 };
 
 // --- NEW: Load Persistent State ---
@@ -183,14 +171,11 @@ function loadState() {
         try {
             const rawData = fs.readFileSync(STATE_FILE);
             const loadedState = JSON.parse(rawData);
-            // Merge loaded state, prioritize existing if any
             Object.assign(activityStats, loadedState);
             logger.info(chalk.magenta(`Loaded previous bot state from ${STATE_FILE}.`));
-            // Ensure startTime is treated as a Date for calculations
             activityStats.startTime = loadedState.startTime || Date.now();
         } catch (error) {
             logger.error(chalk.red(`Error loading state from ${STATE_FILE}: ${error.message}. Starting fresh.`));
-            // Reset if corrupted
             activityStats = { swaps: 0, sends: 0, liquidityAdds: 0, liquidityRemovals: 0, rebalances: 0, customContractCalls: 0, successfulActions: 0, failedActions: 0, totalTransactions: 0, startTime: Date.now() };
         }
     } else {
@@ -215,7 +200,7 @@ function displayBanner() {
   console.log(chalk.hex("#8A2BE2").bold("███████████████████████████████████████"));
   console.log(chalk.hex("#8A2BE2").bold("█                                       █"));
   console.log(chalk.hex("#8A2BE2").bold("█         XRPL EVM BOT                █"));
-  console.log(chalk.hex("#8A2BE2").bold("█          ( ﾟヮﾟ)                     █")); // Ichigo placeholder
+  console.log(chalk.hex("#8A2BE2").bold("█          ( ﾟヮﾟ)                     █"));
   console.log(chalk.hex("#8A2BE2").bold("█                                       █"));
   console.log(chalk.hex("#8A2BE2").bold("███████████████████████████████████████"));
   console.log(chalk.hex("#D8BFD8")("         Automated DEX Interaction      "));
@@ -226,13 +211,10 @@ async function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// --- MODIFIED: getGasPrice for EIP-1559 and retries ---
 async function getGasPrice(retryAttempt = 0) {
     const feeData = await provider.getFeeData();
-    let buffer = 1.2 + (retryAttempt * 0.1); // Increase buffer by 10% for each retry attempt
+    let buffer = 1.2 + (retryAttempt * 0.1);
 
-    // Prioritize EIP-1559 (type 2) transaction parameters if available
-    // XRPL EVM Sidechain typically uses legacy, so this will likely fall to the else block.
     if (feeData.maxFeePerGas && feeData.maxPriorityFeePerGas) {
         const maxPriorityFeePerGas = (feeData.maxPriorityFeePerGas * BigInt(Math.round(buffer * 100))) / BigInt(100);
         const baseFee = feeData.lastBaseFeePerGas || ethers.parseUnits("1", "gwei");
@@ -241,27 +223,21 @@ async function getGasPrice(retryAttempt = 0) {
         logger.info(chalk.gray(`  Using EIP-1559 gas (Attempt ${retryAttempt + 1}): Max Priority Fee: ${ethers.formatUnits(maxPriorityFeePerGas, 'gwei')} Gwei, Max Fee: ${ethers.formatUnits(maxFeePerGas, 'gwei')} Gwei`));
         return { maxFeePerGas, maxPriorityFeePerGas };
     } else {
-        // Fallback to legacy (type 0) transaction parameters
-        const gasPrice = (feeData.gasPrice || ethers.parseUnits("20", "gwei")); // Fallback to 20 gwei
-        const bufferedGasPrice = (gasPrice * BigInt(Math.round(buffer * 100))) / BigInt(100); // Add buffer
+        const gasPrice = (feeData.gasPrice || ethers.parseUnits("20", "gwei"));
+        const bufferedGasPrice = (gasPrice * BigInt(Math.round(buffer * 100))) / BigInt(100);
         logger.info(chalk.gray(`  Using legacy gas price (Attempt ${retryAttempt + 1}): ${ethers.formatUnits(bufferedGasPrice, 'gwei')} Gwei`));
         return { gasPrice: bufferedGasPrice };
     }
 }
 
-// --- MODIFIED: withRetry for confirmation timeout and passing retryAttempt to getGasPrice ---
-async function withRetry(func, maxRetries = 3, initialDelayMs = 1000, confirmationTimeoutMs = 60000) { // 60 seconds confirmation timeout
+async function withRetry(func, maxRetries = 3, initialDelayMs = 1000, confirmationTimeoutMs = 60000) {
     for (let i = 0; i < maxRetries; i++) {
         try {
-            // Get gas options, adjusted for retry attempt
             const gasOptions = await getGasPrice(i);
-
-            // Call the function, passing gasOptions
             const tx = await func(gasOptions);
             logger.info(chalk.cyan(`Transaction sent: ${EXPLORER_TX_URL}${tx.hash}`));
-            activityStats.totalTransactions++; // Increment total transactions here, as soon as it's sent
+            activityStats.totalTransactions++;
 
-            // Wait for confirmation with a timeout
             const receipt = await Promise.race([
                 tx.wait(),
                 new Promise((resolve, reject) => setTimeout(() => reject(new Error("Transaction confirmation timed out.")), confirmationTimeoutMs))
@@ -269,7 +245,7 @@ async function withRetry(func, maxRetries = 3, initialDelayMs = 1000, confirmati
 
             if (receipt && receipt.status === 1) {
                 logger.info(chalk.green(`✔ Transaction confirmed: Block ${receipt.blockNumber}`));
-                return receipt; // Transaction successful
+                return receipt;
             } else if (receipt && receipt.status === 0) {
                 throw new Error(`Transaction failed on-chain (status 0): ${tx.hash}`);
             } else {
@@ -278,9 +254,9 @@ async function withRetry(func, maxRetries = 3, initialDelayMs = 1000, confirmati
         } catch (error) {
             logger.warn(chalk.yellow(`Attempt ${i + 1}/${maxRetries} failed. Error: ${error.message}`));
             if (i < maxRetries - 1) {
-                await delay(initialDelayMs * (i + 1)); // Exponential backoff
+                await delay(initialDelayMs * (i + 1));
             } else {
-                throw error; // Re-throw if last retry fails
+                throw error;
             }
         }
     }
@@ -313,12 +289,8 @@ async function getWalletBalances(wallet) {
     return balances;
 }
 
-// --- REMOVED: getWalletLPPairs function (no longer needs FACTORY_ADDRESS) ---
-// --- REMOVED: performRemoveLiquidity function (no longer needs FACTORY_ADDRESS) ---
-
 // --- Core Interaction Functions ---
 
-// --- MODIFIED: All transaction functions now accept gasOptions ---
 async function performSwap(wallet, pair, amount, direction, gasOptions) {
   const [A, B] = pair;
   const [inTok, outTok] = direction === "AtoB" ? [A, B] : [B, A];
@@ -522,7 +494,6 @@ async function performAddLiquidity(wallet, cfg, gasOptions) {
 }
 
 
-// --- NEW Helper: Perform Custom Contract Call (Conceptual) ---
 async function performCustomContractCall(wallet, gasOptions) {
     logger.info(chalk.blue(`CUSTOM CONTRACT CALL: Executing a random contract function...`));
 
@@ -544,7 +515,7 @@ async function performCustomContractCall(wallet, gasOptions) {
     let functionArgs = [];
 
     if (typeof selectedFunctionConfig.args === 'function') {
-        functionArgs = selectedFunctionConfig.args(wallet); // Pass wallet for dynamic args
+        functionArgs = selectedFunctionConfig.args(wallet);
     } else if (Array.isArray(selectedFunctionConfig.args)) {
         functionArgs = selectedFunctionConfig.args;
     }
@@ -555,7 +526,7 @@ async function performCustomContractCall(wallet, gasOptions) {
         const txPromise = () => contract[functionName](...functionArgs, { gasLimit: GAS_LIMIT_CUSTOM_CONTRACT, ...gasOptions });
         await withRetry(txPromise);
         logger.info(chalk.green(`✔ Custom contract call to ${functionName} completed.`));
-        activityStats.successfulActions++; // Assuming this counts as a successful action
+        activityStats.successfulActions++;
     } catch (error) {
         logger.error(chalk.red(`Failed to call ${functionName} on ${selectedContractConfig.name}: ${error.message}`));
         activityStats.failedActions++;
@@ -609,14 +580,12 @@ async function checkAndRebalance(wallet) {
     logger.info(chalk.yellow(`Checking balances for rebalancing for wallet: ${wallet.address}`));
     const walletBalances = await getWalletBalances(wallet);
 
-    // Prioritize XRP (native currency) as it's needed for gas
     if (parseFloat(walletBalances.XRP) < REBALANCE_THRESHOLDS.XRP) {
         logger.warn(chalk.yellow(`XRP balance low (${walletBalances.XRP}). Attempting to acquire more XRP...`));
         try {
             if (parseFloat(walletBalances.RIBBIT) > REBALANCE_THRESHOLDS.RIBBIT * 2) {
                 const amountToSwap = (parseFloat(walletBalances.RIBBIT) * 0.05).toFixed(4);
                 logger.info(chalk.blue(`Attempting to swap ${amountToSwap} RIBBIT for WXRP to rebalance XRP...`));
-                // Rebalance actions also need gasOptions, so we need to generate them here
                 await performSwap(wallet, ["RIBBIT", "WXRP"], amountToSwap, "AtoB", await getGasPrice());
                 activityStats.rebalances++;
             } else {
@@ -652,7 +621,6 @@ async function checkAndRebalance(wallet) {
     }
 }
 
-// --- NEW Helper: Select Weighted Action ---
 function selectWeightedAction(weights) {
   let totalWeight = 0;
   for (const action in weights) {
@@ -670,9 +638,8 @@ function selectWeightedAction(weights) {
   return null;
 }
 
-// --- NEW Helper: Send Telegram Alert ---
 async function sendAlert(message, type = "info") {
-    const fullMessage = `*XRPL EVM Bot Alert [${type.toUpperCase()}]:*\n${message}`; // Changed name here too
+    const fullMessage = `*XRPL EVM Bot Alert [${type.toUpperCase()}]:*\n${message}`;
     logger.log(type, chalk.magenta(`ALERT DISPATCH: ${message}`));
 
     if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
@@ -708,12 +675,10 @@ async function startRandomLoop(wallets) {
 
   const twentyFourHours = 24 * 60 * 60 * 1000;
 
-  // --- Initial Telegram Alert ---
   await sendAlert("XRPL EVM Bot started its 24-hour random interaction loop.", "info");
 
-  // --- Function to display/log periodic summary and save state ---
   const logPeriodicSummary = () => {
-    const elapsedMs = Date.now() - activityStats.startTime; // Use stored startTime
+    const elapsedMs = Date.now() - activityStats.startTime;
     const elapsedHours = (elapsedMs / (1000 * 60 * 60)).toFixed(2);
     const elapsedMinutes = (elapsedMs / (1000 * 60)).toFixed(0);
 
@@ -722,7 +687,7 @@ async function startRandomLoop(wallets) {
     logger.info(chalk.hex("#FFA500")(`  Sends (Random/S&R): ${activityStats.sends}`));
     logger.info(chalk.hex("#FFA500")(`  Liquidity Added: ${activityStats.liquidityAdds}`));
     logger.info(chalk.hex("#FFA500")(`  Rebalances: ${activityStats.rebalances}`));
-    logger.info(chalk.hex("#FFA500")(`  Custom Calls: ${activityStats.customContractCalls || 0}`)); // New stat
+    logger.info(chalk.hex("#FFA500")(`  Custom Calls: ${activityStats.customContractCalls || 0}`));
     logger.info(chalk.hex("#FFA500")(`  Total Successful Actions: ${activityStats.successfulActions}`));
     logger.info(chalk.hex("#FFA500")(`  Total Failed Actions: ${activityStats.failedActions}`));
     logger.info(chalk.hex("#FFA500")(`  Total On-Chain Transactions: ${activityStats.totalTransactions}`));
@@ -739,29 +704,22 @@ async function startRandomLoop(wallets) {
              `*Failed Actions:* ${activityStats.failedActions}\n` +
              `*Total On-Chain TXs:* ${activityStats.totalTransactions}`, 'info');
 
-    saveState(); // Save state with each periodic summary
+    saveState();
   };
 
-  // --- Schedule periodic summary logging ---
-  const summaryInterval = setInterval(logPeriodicSummary, 30 * 60 * 1000); // Every 30 minutes
+  const summaryInterval = setInterval(logPeriodicSummary, 30 * 60 * 1000);
 
-  // Handle Ctrl+C to gracefully exit and clear interval
   process.on("SIGINT", () => {
     clearInterval(summaryInterval);
-    logPeriodicSummary(); // Final summary and state save
+    logPeriodicSummary();
     sendAlert("XRPL EVM Bot interrupted and shutting down.", "warn");
     process.exit(0);
   });
 
   while (Date.now() - activityStats.startTime < twentyFourHours) {
-    // --- Scalability Note ---
-    // For simplicity and to avoid complex nonce management/race conditions across wallets,
-    // wallets are processed sequentially. For massive scale, consider worker threads or a job queue.
-
     for (const wallet of wallets) {
       logger.info(chalk.yellow(`\nProcessing Wallet: ${wallet.address}`));
 
-      // --- Perform rebalancing first for this wallet (preemptive) ---
       try {
           await checkAndRebalance(wallet);
           await delay(DELAY_BETWEEN_ACTIONS);
@@ -835,20 +793,6 @@ async function startRandomLoop(wallets) {
               activityStats.successfulActions++;
               break;
 
-            // case 'removeLiquidity': // REMOVED
-            //   const lpPositions = await getWalletLPPairs(wallet);
-            //   if (lpPositions.length > 0) {
-            //       const selectedLpPosition = lpPositions[Math.floor(Math.random() * lpPositions.length)];
-            //       await performRemoveLiquidity(wallet, selectedLpPosition);
-            //       activityStats.liquidityRemovals++;
-            //       activityStats.successfulActions++;
-            //   } else {
-            //       logger.info(chalk.gray(`Wallet ${wallet.address} has no LP positions to remove. Skipping removal action.`));
-            //       success = true;
-            //       continue;
-            //   }
-            //   break;
-
             case 'customContractCall':
                 activityStats.customContractCalls = (activityStats.customContractCalls || 0);
                 await performCustomContractCall(wallet);
@@ -862,8 +806,8 @@ async function startRandomLoop(wallets) {
               success = true;
               break;
           }
-          success = true; // Mark success after chosen action completes successfully
-          await delay(DELAY_BETWEEN_ACTIONS); // Delay after each successful action
+          success = true;
+          await delay(DELAY_BETWEEN_ACTIONS);
         } catch (err) {
           logger.error(chalk.red(`Action failed for wallet ${wallet.address}: ${err.message}`), err);
           activityStats.failedActions++;
@@ -872,7 +816,7 @@ async function startRandomLoop(wallets) {
             logger.warn(chalk.yellow(`Retrying action for wallet ${wallet.address} (${retries} retries left)...`));
             await delay(DELAY_BETWEEN_ACTIONS * 2);
           } else {
-              await sendAlert(`Action for wallet ${wallet.address.slice(0,6)}... failed repeatedly after retries: ${err.message}`, 'error');
+              await sendAlert(`Wallet ${wallet.address.slice(0,6)}... was skipped for a full cycle due to repeated transaction failures: ${err.message}`, 'error');
           }
         }
       }
@@ -881,7 +825,7 @@ async function startRandomLoop(wallets) {
         logger.error(chalk.red(`Skipping wallet ${wallet.address} for this cycle due to repeated failures.`));
         await sendAlert(`Wallet ${wallet.address.slice(0,6)}... was skipped for a full cycle due to repeated transaction failures.`, 'warn');
       }
-      await delay(DELAY_BETAY_BETWEEN_WALLETS);
+      await delay(DELAY_BETWEEN_WALLETS); // Corrected typo here
     }
     logger.info(chalk.gray("\nAll wallets processed for this cycle. Waiting for next cycle..."));
     await delay(DELAY_AFTER_CYCLE);
@@ -910,7 +854,6 @@ async function runMenu(wallets) {
         { name: "2) Perform single swap", value: "singleSwap" },
         { name: "3) Perform single token send", value: "singleSend" },
         { name: "4) Perform single add liquidity", value: "singleAddLiquidity" },
-        // { name: "5) Perform single remove liquidity", value: "singleRemoveLiquidity" }, // Removed
         { name: "5) Start 24-Hour Random Loop", value: "randomLoop" },
         { name: "6) Exit",           value: "exit" },
       ]
@@ -925,8 +868,6 @@ async function runMenu(wallets) {
           for (const tokenSymbol in balances) {
             logger.info(`  ${tokenSymbol}: ${balances[tokenSymbol]}`);
           }
-          // No longer checking specific LP balances as Factory is removed
-          // The bot will only track tokens listed in TOKENS
         }
         console.log();
         await inquirer.prompt([{ name: "dummy", type: "input", message: "Press Enter to continue…" }]);
@@ -955,7 +896,6 @@ async function runMenu(wallets) {
         const selectedPairSwap = ALL_PAIRS[swapCfg.pairIndex];
 
         try {
-          // Single actions in menu also use withRetry and dynamic gas
           await withRetry(() => performSwap(selectedWalletSwap, selectedPairSwap, swapCfg.amount, swapCfg.direction));
         } catch (err) {
           logger.error(chalk.red(`Swap failed: ${err.message}`));
@@ -1036,13 +976,6 @@ async function runMenu(wallets) {
         await inquirer.prompt([{ name: "dummy", type: "input", message: "Press Enter to continue…" }]);
         break;
 
-      // case "singleRemoveLiquidity": // REMOVED
-      //   logger.info(chalk.hex("#D8BFD8").bold("--- Performing Single Remove Liquidity ---"));
-      //   logger.warn(chalk.yellow("This feature is currently disabled because the Factory Address (needed to find LP positions) is not configured."));
-      //   console.log();
-      //   await inquirer.prompt([{ name: "dummy", type: "input", message: "Press Enter to continue…" }]);
-      //   break;
-
       case "randomLoop":
         await startRandomLoop(wallets);
         break;
@@ -1079,7 +1012,7 @@ async function main() {
   wallets = keys.map(key => new ethers.Wallet(key, provider));
   logger.info(chalk.green(`Loaded ${wallets.length} wallet(s).`));
 
-  loadState(); // Load state after wallets are loaded
+  loadState();
 
   await runMenu(wallets);
 }
@@ -1095,6 +1028,6 @@ async function testRpc() {
 
 main().catch(error => {
   logger.error(chalk.red(`Fatal error in main execution: ${error.message}`), error);
-  sendAlert(`Fatal error: ${error.message}`, 'critical'); // Send critical alert on fatal error
+  sendAlert(`Fatal error: ${error.message}`, 'error'); // FIXED: Changed 'critical' to 'error'
   process.exit(1);
 });

@@ -17,7 +17,7 @@ const provider = new ethers.JsonRpcProvider(RPC_URL);
 
 // --- DELAYS ---
 const DELAY_BETWEEN_ACTIONS = 200; // ms (was DELAY_BETWEEN_SWAPS)
-const DELAY_BETWEEN_WALLETS = 500; // ms // <-- TYPO FIXED HERE
+const DELAY_BETWEEN_WALLETS = 500; // ms
 const DELAY_AFTER_CYCLE = 5000; // ms
 
 // --- GAS LIMITS ---
@@ -27,15 +27,14 @@ const GAS_LIMIT_COMPLEX = 200000;
 const GAS_LIMIT_CUSTOM_CONTRACT = 150000; // For arbitrary contract calls
 
 // --- CONTRACT ADDRESSES ---
-// IMPORTANT: Replace with actual testnet token addresses and router address
-// YOU MUST FIND THESE FROM XRPL EVM TESTNET DOCUMENTATION/EXPLORER
-const ROUTER_ADDRESS = "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"; // <<== THIS IS STILL THE PLACEHOLDER. UPDATE THIS!
+// IMPORTANT: These addresses are now updated with the ones you found on the XRPL EVM Testnet!
+const ROUTER_ADDRESS = "0x25734cf60ca213e4396b27d31215b026601e96b7";
 
 const TOKENS = {
   "XRP":    "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE", // Common address for native ETH/XRP
-  "RIBBIT": "0x73ee7BC68d3f07CfcD68776512b7317FE57E1939", // <<== PLACEHOLDER. UPDATE THIS!
-  "RISE":   "0x0c28777DEebe4589e83EF2Dc7833354e6a0aFF85", // <<== PLACEHOLDER. UPDATE THIS!
-  "WXRP":   "0x81Be083099c2C65b062378E74Fa8469644347BB7" // <<== PLACEHOLDER. UPDATE THIS!
+  "RIBBIT": "0x73ee7BC68d3f07CfcD68776512b7317FE57E1939",
+  "RISE":   "0x0c28777DEebe4589e83EF2Dc7833354e6a0aFF85",
+  "WXRP":   "0x81Be083099c2C65b062378E74Fa8469644347BB7"
   // Add more tokens as needed
 };
 
@@ -74,7 +73,7 @@ const ACTION_WEIGHTS = {
   swap: 40,
   send: 20,
   addLiquidity: 20,
-  customContractCall: 20,
+  customContractCall: 20, // Keep this, but ensure you replace the placeholder address or comment it out if not using
 };
 
 // --- Telegram Alert Configuration ---
@@ -107,7 +106,7 @@ const ROUTER_ABI = [
 const CUSTOM_CONTRACTS_TO_INTERACT_WITH = [
     {
         name: "TestNFTContract",
-        address: "0xYourTestNFTContractAddressHere", // Replace with actual address
+        address: "0xYourTestNFTContractAddressHere", // <<< IMPORTANT: Replace with actual deployed NFT contract address, or comment out/remove this entry if not using.
         abi: [
             "function mint(address to, uint256 tokenId) public",
             "function tokenURI(uint256 tokenId) view returns (string)",
@@ -345,18 +344,14 @@ async function performSwap(wallet, pair, amount, direction, gasOptions) {
         throw new Error("Insufficient XRP for value + gas.");
     }
 
-    await withRetry(() =>
-      router.swapExactETHForTokens(amountOutMin, path, wallet.address, deadline, { value: amountInRaw, gasLimit: GAS_LIMIT_COMPLEX, ...gasOptions })
-    );
+    await router.swapExactETHForTokens(amountOutMin, path, wallet.address, deadline, { value: amountInRaw, gasLimit: GAS_LIMIT_COMPLEX, ...gasOptions });
   } else {
     const tokenC = new ethers.Contract(TOKENS[inTok], ERC20_ABI, wallet);
 
     const currentAllowance = await tokenC.allowance(wallet.address, ROUTER_ADDRESS);
     if (currentAllowance < amountInRaw) {
         logger.info(chalk.blue(`Approving router for ${amount} ${inTok}...`));
-        await withRetry(() =>
-            tokenC.approve(ROUTER_ADDRESS, amountInRaw, { gasLimit: GAS_LIMIT_ERC20, ...gasOptions })
-        );
+        await tokenC.approve(ROUTER_ADDRESS, amountInRaw, { gasLimit: GAS_LIMIT_ERC20, ...gasOptions });
     } else {
        logger.info(chalk.gray(`Already approved enough ${inTok} for router.`));
     }
@@ -365,7 +360,7 @@ async function performSwap(wallet, pair, amount, direction, gasOptions) {
       ? () => router.swapExactTokensForETH(amountInRaw, amountOutMin, path, wallet.address, deadline, { gasLimit: GAS_LIMIT_COMPLEX, ...gasOptions })
       : () => router.swapExactTokensForTokens(amountInRaw, amountOutMin, path, wallet.address, deadline, { gasLimit: GAS_LIMIT_COMPLEX, ...gasOptions });
 
-    await withRetry(swapFn);
+    await swapFn();
   }
 }
 
@@ -392,26 +387,20 @@ async function performSendAndReceive(wallet, cfg, gasOptions) {
     const newAddress = newWallet.address;
 
     logger.info(chalk.gray(`  Funding new address ${newAddress} with 0.001 XRP...`));
-    await withRetry(() =>
-      wallet.sendTransaction({
+    await wallet.sendTransaction({
         to: newAddress,
         value: ethers.parseEther("0.001"),
         gasLimit: GAS_LIMIT_XRP,
         ...gasOptions
-      })
-    );
+      });
 
     logger.info(chalk.gray(`  Sending ${cfg.sendAmount} ${cfg.sendTokenName} to ${newAddress}...`));
-    await withRetry(() =>
-      tokenC.transfer(newAddress, sendAmountRaw, { gasLimit: GAS_LIMIT_ERC20, ...gasOptions })
-    );
+    await tokenC.transfer(newAddress, sendAmountRaw, { gasLimit: GAS_LIMIT_ERC20, ...gasOptions });
 
     logger.info(chalk.gray(`  Sending back token from ${newAddress} to main wallet...`));
     const newWalletSigner = new ethers.Wallet(newWallet.privateKey, provider);
     const newTokenC = new ethers.Contract(token, ERC20_ABI, newWalletSigner);
-    await withRetry(() =>
-      newTokenC.transfer(wallet.address, sendAmountRaw, { gasLimit: GAS_LIMIT_ERC20, ...gasOptions })
-    );
+    await newTokenC.transfer(wallet.address, sendAmountRaw, { gasLimit: GAS_LIMIT_ERC20, ...gasOptions });
   }
 }
 
@@ -436,9 +425,7 @@ async function performRandomSend(wallet, cfg, gasOptions) {
   for (let i = 0; i < cfg.sendAddressCount; i++) {
     const randomWallet = ethers.Wallet.createRandom();
     logger.info(chalk.gray(`  Sending ${cfg.sendAmount} ${cfg.sendTokenName} to ${randomWallet.address}...`));
-    await withRetry(() =>
-      tokenC.transfer(randomWallet.address, sendAmountRaw, { gasLimit: GAS_LIMIT_ERC20, ...gasOptions })
-    );
+    await tokenC.transfer(randomWallet.address, sendAmountRaw, { gasLimit: GAS_LIMIT_ERC20, ...gasOptions });
   }
 }
 
@@ -473,15 +460,12 @@ async function performAddLiquidity(wallet, cfg, gasOptions) {
   const currentAllowance = await tokenC.allowance(wallet.address, ROUTER_ADDRESS);
     if (currentAllowance < lpTokenAmountRaw) {
         logger.info(chalk.blue(`Approving router for ${cfg.lpTokenAmount} ${cfg.lpTokenName}...`));
-        await withRetry(() =>
-            tokenC.approve(ROUTER_ADDRESS, lpTokenAmountRaw, { gasLimit: GAS_LIMIT_ERC20, ...gasOptions })
-        );
+        await tokenC.approve(ROUTER_ADDRESS, lpTokenAmountRaw, { gasLimit: GAS_LIMIT_ERC20, ...gasOptions });
     } else {
        logger.info(chalk.gray(`Already approved enough ${cfg.lpTokenName} for router.`));
     }
 
-  await withRetry(() =>
-    router.addLiquidityETH(
+  await router.addLiquidityETH(
       tokenAddress,
       lpTokenAmountRaw,
       0, // amountTokenMin
@@ -489,8 +473,7 @@ async function performAddLiquidity(wallet, cfg, gasOptions) {
       wallet.address,
       deadline,
       { value: lpBaseAmountRaw, gasLimit: GAS_LIMIT_COMPLEX, ...gasOptions }
-    )
-  );
+    );
 }
 
 
@@ -510,7 +493,7 @@ async function performCustomContractCall(wallet, gasOptions) {
         throw new Error(`No functions configured for ${selectedContractConfig.name}.`);
     }
 
-    const selectedFunctionConfig = selectedContractConfig.functions[Math.floor(Math.random() * selectedContractConfig.functions.length)];
+    const selectedFunctionConfig = selectedContractConfig.functions[Math.floor(Math.random() * selectedFunctionConfig.length)];
     const functionName = selectedFunctionConfig.name;
     let functionArgs = [];
 
@@ -523,8 +506,7 @@ async function performCustomContractCall(wallet, gasOptions) {
     logger.info(chalk.gray(`  Calling ${functionName}(${functionArgs.join(', ')}) on ${selectedContractConfig.name} (${selectedContractConfig.address})...`));
 
     try {
-        const txPromise = () => contract[functionName](...functionArgs, { gasLimit: GAS_LIMIT_CUSTOM_CONTRACT, ...gasOptions });
-        await withRetry(txPromise);
+        await contract[functionName](...functionArgs, { gasLimit: GAS_LIMIT_CUSTOM_CONTRACT, ...gasOptions });
         logger.info(chalk.green(`✔ Custom contract call to ${functionName} completed.`));
         activityStats.successfulActions++;
     } catch (error) {
@@ -586,7 +568,7 @@ async function getCalculatedAmount(wallet, tokenSymbol) {
 
     // Return the amount formatted as a string with appropriate precision
     // Use Math.max to ensure precision is at least 4 to avoid overly short numbers like 0.0
-    return amount.toFixed(Math.max(4, decimals)); 
+    return amount.toFixed(Math.max(4, decimals));
   } catch (error) {
     logger.warn(chalk.yellow(`Warning: Could not calculate amount for ${tokenSymbol} for wallet ${wallet.address}. ${error.message}. Returning "0".`));
     return "0"; // Always return "0" as a string on error
@@ -614,7 +596,10 @@ async function checkAndRebalance(wallet) {
                      continue;
                 }
                 logger.info(chalk.blue(`Attempting to swap ${amountToSwap} ${tokenSymbol} for XRP to rebalance XRP...`));
-                await performSwap(wallet, [tokenSymbol, "XRP"], amountToSwap, "AtoB", await getGasPrice());
+                // Call withRetry wrapper
+                await withRetry(async (gasOptions) => {
+                    await performSwap(wallet, [tokenSymbol, "XRP"], amountToSwap, "AtoB", gasOptions);
+                });
                 activityStats.rebalances++;
                 rebalanced = true;
                 break; // Only rebalance XRP once per check
@@ -645,7 +630,10 @@ async function checkAndRebalance(wallet) {
                         continue;
                     }
                     logger.info(chalk.blue(`Attempting to swap ${amountToSwapXRP} XRP for ${tokenSymbol} to rebalance...`));
-                    await performSwap(wallet, ["XRP", tokenSymbol], amountToSwapXRP, "AtoB", await getGasPrice());
+                    // Call withRetry wrapper
+                    await withRetry(async (gasOptions) => {
+                        await performSwap(wallet, ["XRP", tokenSymbol], amountToSwapXRP, "AtoB", gasOptions);
+                    });
                     activityStats.rebalances++;
                 } else {
                     logger.info(chalk.gray(`Not enough XRP to rebalance ${tokenSymbol} for wallet ${wallet.address}.`));
@@ -886,7 +874,7 @@ async function startRandomLoop(wallets) {
         logger.error(chalk.red(`Skipping wallet ${wallet.address} for this cycle due to repeated failures.`));
         await sendAlert(`Wallet ${wallet.address.slice(0,6)}... was skipped for a full cycle due to repeated transaction failures.`, 'warn');
       }
-      await delay(DELAY_BETWEEN_WALLETS); // <-- TYPO FIXED HERE
+      await delay(DELAY_BETWEEN_WALLETS);
     }
     logger.info(chalk.gray("\nAll wallets processed for this cycle. Waiting for next cycle..."));
     await delay(DELAY_AFTER_CYCLE);

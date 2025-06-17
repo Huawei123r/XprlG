@@ -7,9 +7,14 @@ const winston = require("winston");
 const path = require("path");
 require("dotenv").config(); // Load environment variables from .env file
 
+// For fetch API, if Node.js version is < 18, you might need:
+// const fetch = require('node-fetch'); // Uncomment and npm install node-fetch if on older Node.js
+
 // --- Configuration ---
 const RPC_URL = process.env.RPC_URL || "https://rpc-evm-sidechain.xrpl.org/"; // XRPL EVM Testnet RPC
-const PRIVATE_KEYS = process.env.PRIVATE_KEYS ? process.env.PRIVATE_KEYS.split(',') : []; // Comma-separated private keys
+// PRIVATE_KEYS should be a comma-separated string in .env: PRIVATE_KEYS=0xkey1,0xkey2
+const PRIVATE_KEYS_ENV = process.env.PRIVATE_KEYS;
+const PRIVATE_KEYS = PRIVATE_KEYS_ENV ? PRIVATE_KEYS_ENV.split(',') : []; // Comma-separated private keys
 const EXPLORER_TX_URL = process.env.EXPLORER_TX_URL || "https://explorer.testnet.xrpl.org/tx/"; // Base URL for transaction links
 
 // Action probabilities (sum should be 100)
@@ -22,16 +27,12 @@ const ACTION_PROBABILITIES = {
   // CUSTOM_CONTRACT_CALL: 0, // Set to >0 to enable
 };
 
-// --- Token Configuration (Update with actual testnet token addresses) ---
+// --- Token Configuration (Using YOUR ORIGINAL testnet token addresses) ---
 const TOKENS = {
   // WXRP is usually required for swaps involving XRP on EVM DEXs
-  // This is a placeholder address, find the real WXRP address for XRPL EVM testnet
-  WXRP: "0x81Be083099c2C65b062378E74Fa8469644347BB7", // Example WXRP token address
-  // Use "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE" for native ETH/XRP in path for router if needed, otherwise use WXRP.
-  // We will treat XRP as the native token for balance checks and wrap/unwrap when needed for swaps.
-
-  RISE: "0x0c28777DEebe4589e83EF2Dc7833354e6a0aFF85", // Example RISE token address
-  RIBBIT: "0x3D757474472f8F2A66Bdc1b51e4C4D11E813C16c", // Example RIBBIT token address
+  WXRP: "0x81Be083099c2C65b062378E74Fa8469644347BB7", // Your Original WXRP token address
+  RISE: "0x0c28777DEebe4589e83EF2Dc7833354e6a0aFF85", // Your Original RISE token address
+  RIBBIT: "0x3D757474472f8F2A66Bdc1b51e4C4D11E813C16c", // Your Original RIBBIT token address
   // Add other tokens as needed
 };
 
@@ -159,9 +160,6 @@ const ERC20_ABI = [
   "function symbol() view returns (string)"
 ];
 
-// This ABI includes standard Uniswap V2 Router function signatures.
-// It has been meticulously reviewed and corrected for standard Uniswap V2 structure.
-// If 'could not decode result data' persists, consider subtle differences in XRPL EVM's specific deployment.
 const ROUTER_ABI = [
   {
     "inputs":[
@@ -252,7 +250,7 @@ const ROUTER_ABI = [
         {"internalType":"address","name":"token","type":"address"},
         {"internalType":"uint256","name":"liquidity","type":"uint256"},
         {"internalType":"uint256","name":"amountTokenMin","type":"uint256"},
-        {"internalType":"uint256","name":"amountETHMin","type":"uint256"}, // <-- CORRECTED THIS LINE PREVIOUSLY
+        {"internalType":"uint256","name":"amountETHMin","type":"uint256"},
         {"internalType":"address","name":"to","type":"address"},
         {"internalType":"uint256","name":"deadline","type":"uint256"}
     ],
@@ -529,7 +527,6 @@ async function withRetry(func, maxRetries = 3, initialDelayMs = 1000, confirmati
 
             const receipt = await Promise.race([
                 tx.wait(),
-                // CORRECTED LINE BELOW: Removed the extra ')' at the end of the setTimeout call
                 new Promise((resolve, reject) => setTimeout(() => reject(new Error("Transaction confirmation timed out.")), confirmationTimeoutMs))
             ]);
 
@@ -562,9 +559,18 @@ async function getWalletTokenBalance(wallet, tokenSymbol) {
         const tokenAddress = TOKENS[tokenSymbol];
         if (!tokenAddress) throw new Error(`Token address not found for symbol: ${tokenSymbol}`);
         const c = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
-        const decs = await c.decimals();
-        const bal = await c.balanceOf(wallet.address);
-        return ethers.formatUnits(bal, decs);
+        // Important: Catch specific errors for `decimals()` call as it's the first interaction
+        try {
+            const decs = await c.decimals();
+            const bal = await c.balanceOf(wallet.address);
+            return ethers.formatUnits(bal, decs);
+        } catch (error) {
+            // Re-throw with more specific info for debugging
+            if (error.code === 'CALL_EXCEPTION' || error.code === 'BAD_DATA' || error.code === 'INVALID_ARGUMENT') {
+                throw new Error(`Error fetching decimals or balance for ${tokenSymbol} (${tokenAddress}): ${error.message}`);
+            }
+            throw error; // Re-throw other errors
+        }
     }
 }
 
@@ -572,20 +578,19 @@ async function getWalletBalances(wallet) {
     const balances = {};
     for (const tokenSymbol in TOKENS) {
         try {
-            // For the special XRP "E" address, ensure it's not treated as an ERC20
-            if (tokenSymbol === "XRP" && TOKENS[tokenSymbol] === "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE") {
+            // Special handling for the native XRP symbol if it's not defined in TOKENS but implicitly exists
+            if (tokenSymbol === "XRP" && !TOKENS[tokenSymbol]) {
                 const balance = await provider.getBalance(wallet.address);
                 balances[tokenSymbol] = ethers.formatEther(balance);
             } else {
-                // For other tokens, fetch as ERC20
                 balances[tokenSymbol] = await getWalletTokenBalance(wallet, tokenSymbol);
             }
         } catch (error) {
             logger.warn(chalk.yellow(`Could not fetch balance for ${tokenSymbol} for wallet ${wallet.address}: ${error.message}`));
-            balances[tokenSymbol] = "0";
+            balances[tokenSymbol] = "0"; // Set to "0" if balance fetch fails
         }
     }
-    // Also get XRP balance explicitly if not already in TOKENS (e.g., if WXRP is there but not XRP)
+    // Also get XRP balance explicitly if not already covered (e.g., if WXRP is there but not native XRP)
     if (!balances["XRP"]) {
         try {
             const xrpBalance = await provider.getBalance(wallet.address);
@@ -833,44 +838,17 @@ async function performRemoveLiquidity(wallet, cfg, gasOptions) {
 
     const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, wallet);
     const providerRouter = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, provider); // Use provider for read calls on router
-    
-    // Uniswap V2 Router doesn't have getPair directly. You usually derive it from Factory.
-    // For simplicity in a bot, we assume a standard WXRP/Token pair for LP removal.
-    // If the router doesn't have 'factory' or 'getPair' directly, this might need adjustment.
-    // A more robust approach would involve fetching factory address from router, then calling getPair on factory.
-    // For now, assuming factory address is discoverable or a known constant.
-    
-    // For Uniswap V2, the pair address can be calculated or fetched from the Factory contract.
-    // Since the Router ABI doesn't usually contain `getPair`, this part is simplified.
-    // If this fails, it might be due to the absence of the `getPair` function on the Router itself.
-    // You'd typically need the Factory ABI and contract to get the pair address.
-    // Let's assume for now that the `getPair` is exposed or we'll get an error.
-    // The `getPair` function is actually on the Uniswap V2 Factory, not the Router.
-    // To make this work robustly, you'd need the Factory address and its ABI.
-    // For now, if getPair isn't on the router, this will fail.
-    
-    // A common workaround if getPair is not directly callable on router is to assume a standard pair creation
-    // and know the factory address. For this example, let's keep it simple, assuming a helper or direct lookup
-    // or that `router.factory()` exists and then calling `factoryContract.getPair()`.
 
     // THIS IS A PLACEHOLDER. A robust solution needs the FACTORY_ADDRESS and FACTORY_ABI
-    // const FACTORY_ADDRESS = await providerRouter.factory(); // If router has a factory() method
-    // const FACTORY_ABI = ["function getPair(address tokenA, address tokenB) external view returns (address pair)"];
-    // const factoryContract = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, provider);
-    // const lpPairAddress = await factoryContract.getPair(TOKENS.WXRP, tokenAddress);
-
-    // For now, let's proceed with the assumption that we know the LP token address or derive it.
-    // A typical LP token address isn't directly the tokenAddress. It's the address of the specific liquidity pool.
-    // This is a common point of confusion. You need to know the *LP token address* for the WXRP/RISE pair.
-    // If you've added liquidity, you'd receive LP tokens. You need their address.
-    
-    // For demonstration, let's assume `lpTokenContract` is the actual LP token you hold.
-    // In a real scenario, you'd need to find the specific LP token address for WXRP/RISE.
-    // This often involves looking up the pair address from the Factory contract.
-    // For this example, I'll use the 'RISE' token address as a placeholder for the LP token address itself,
-    // which is not entirely accurate but allows the code structure to proceed.
-    // YOU WILL LIKELY NEED TO CHANGE THIS:
-    const lpTokenForPairAddress = TOKENS[cfg.lpTokenName]; // THIS IS LIKELY WRONG, IT SHOULD BE THE ACTUAL LP TOKEN ADDRESS FOR THE PAIR
+    // To get the actual LP token address for a pair (e.g., WXRP/RISE), you typically:
+    // 1. Get Factory Address from Router: await router.factory();
+    // 2. Instantiate Factory Contract: new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, provider);
+    // 3. Get Pair Address from Factory: await factoryContract.getPair(TOKENS.WXRP, tokenAddress);
+    // 4. Use the returned pair address as `lpTokenForPairAddress`
+    // For now, assuming `lpTokenForPairAddress` is the tokenAddress itself, which is NOT entirely correct for LP tokens.
+    // However, for testnet scenarios where the "LP token" is sometimes treated as the underlying ERC20 for simplicity, it might work.
+    // IF THIS FAILS, IT'S LIKELY BECAUSE lpTokenForPairAddress IS NOT THE ACTUAL LP TOKEN.
+    const lpTokenForPairAddress = TOKENS[cfg.lpTokenName]; // <--- This needs to be the actual LP token address for the pair!
 
     const lpTokenContract = new ethers.Contract(lpTokenForPairAddress, ERC20_ABI, wallet); // Use wallet for signed calls
     const lpBalance = await lpTokenContract.balanceOf(wallet.address);
@@ -1194,7 +1172,11 @@ async function startRandomLoop() {
                 if (receipt) {
                     actionSuccessful = true;
                 } else {
-                    throw new Error("Action failed to produce a confirmed transaction.");
+                    // Only throw if no receipt AND not a known "skip" condition (like insufficient balance)
+                    // This prevents retries for known-fail scenarios that are already logged as skips.
+                    if (!error || !error.message.includes("Insufficient") && !error.message.includes("zero")) {
+                         throw new Error("Action failed to produce a confirmed transaction.");
+                    }
                 }
 
             } catch (error) {
@@ -1244,6 +1226,39 @@ function sendAlert(message, level = 'info') {
     } else {
         logger.info(chalk.bgGreen.black(alertMessage));
     }
+
+    // --- TELEGRAM ALERTS (UNCOMMENT TO ENABLE) ---
+    if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+        const botToken = process.env.TELEGRAM_BOT_TOKEN;
+        const chatId = process.env.TELEGRAM_CHAT_ID;
+        const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+        const text = `*XRPL EVM Bot Alert (${level.toUpperCase()})*\n\n${message}`;
+
+        // Node.js fetch API (built-in since Node.js 18)
+        fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, text: text, parse_mode: 'Markdown' })
+        })
+        .then(response => {
+            if (!response.ok) {
+                // If response is not ok, try to read the error from the body
+                return response.json().then(err => { throw new Error(`Telegram API error: ${err.description || response.statusText}`); });
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (!data.ok) {
+                logger.error(chalk.red(`Failed to send Telegram alert: ${data.description}`));
+            } else {
+                logger.debug(chalk.gray(`Telegram alert sent successfully.`));
+            }
+        })
+        .catch(error => {
+            logger.error(chalk.red(`Error sending Telegram alert: ${error.message}`));
+        });
+    }
+    // --- END TELEGRAM ALERTS ---
 }
 
 // Simple state management (can be expanded for more complex data)
@@ -1303,14 +1318,13 @@ async function main() {
     process.exit(1);
   }
 
-  const keys = PRIVATE_KEYS;
-
-  if (keys.length === 0) {
-    logger.error(chalk.red("No PRIVATE_KEYS found in .env. Please add at least one private key."));
+  // Ensure PRIVATE_KEYS is properly parsed from the environment variable
+  if (PRIVATE_KEYS.length === 0) {
+    logger.error(chalk.red("No PRIVATE_KEYS found in .env. Please add at least one private key as a comma-separated string (e.g., PRIVATE_KEYS=0xkey1,0xkey2)."));
     process.exit(1);
   }
 
-  wallets = keys.map(key => new ethers.Wallet(key, provider));
+  wallets = PRIVATE_KEYS.map(key => new ethers.Wallet(key, provider));
   logger.info(chalk.green(`Loaded ${wallets.length} wallet(s).`));
 
   loadState();

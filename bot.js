@@ -252,7 +252,7 @@ const ROUTER_ABI = [
         {"internalType":"address","name":"token","type":"address"},
         {"internalType":"uint256","name":"liquidity","type":"uint256"},
         {"internalType":"uint256","name":"amountTokenMin","type":"uint256"},
-        {"internalType":"uint256","name":"amountETHMin","type":"uint256"}, // <-- CORRECTED THIS LINE
+        {"internalType":"uint256","name":"amountETHMin","type":"uint256"}, // <-- CORRECTED THIS LINE PREVIOUSLY
         {"internalType":"address","name":"to","type":"address"},
         {"internalType":"uint256","name":"deadline","type":"uint256"}
     ],
@@ -529,7 +529,8 @@ async function withRetry(func, maxRetries = 3, initialDelayMs = 1000, confirmati
 
             const receipt = await Promise.race([
                 tx.wait(),
-                new Promise((resolve, reject) => setTimeout(() => reject(new Error("Transaction confirmation timed out."))), confirmationTimeoutMs))
+                // CORRECTED LINE BELOW: Removed the extra ')' at the end of the setTimeout call
+                new Promise((resolve, reject) => setTimeout(() => reject(new Error("Transaction confirmation timed out.")), confirmationTimeoutMs))
             ]);
 
             if (receipt && receipt.status === 1) {
@@ -960,7 +961,7 @@ async function getCalculatedAmount(wallet, tokenSymbol) {
   try {
     if (tokenSymbol === "XRP") {
       balanceBigInt = await provider.getBalance(wallet.address);
-      decimals = 18; // XRP is 18 decimals on EVM
+      decimals = 18; // XRP is treated as 18 decimals on EVM
     } else {
       const tokenAddress = TOKENS[tokenSymbol];
       if (!tokenAddress) {
